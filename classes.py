@@ -190,8 +190,10 @@ class process:
     Orquesta todo el procesamiento manteniendo limpio el ambiente de trabajo.
     """
 
-    def __init__(self, inputDirectory, outputDirectory):
+    def __init__(self, inputDirectory, outputDirectory, agents):
         from pathlib import Path
+        from multiprocessing import Pool
+        self.pool = Pool(agents)
 
         self.inputDirectory = inputDirectory
         self.outputDirectory = outputDirectory
@@ -206,17 +208,26 @@ class process:
             "invalid" : 0,
             "inconsistent" : 0
         }
-        dataUsers = data["user_id"].unique()
-        for u in dataUsers:
-            auxData = data.loc[data["user_id"] == u].reset_index(drop = True)
-            auxData.sort_values(by = "event_time", inplace = True)
-            self.users[u] = user(u, auxData.at[0, "user_creation_time"])
-            auxData.apply(self.users[u].add_transaction, axis = 1)
-            self.errors["invalid"] += self.users[u].errors["invalid"]
-            self.errors["inconsistent"] += self.users[u].errors["inconsistent"]
+        data = [value for key, value in data.groupby("user_id")]
+        self.pool(self._get_users, dataUsers)
+        #for u in dataUsers:
+        #    auxData = data.loc[data["user_id"] == u].reset_index(drop = True)
+        #    auxData.sort_values(by = "event_time", inplace = True)
+        #    self.users[u] = user(u, auxData.at[0, "user_creation_time"])
+        #    auxData.apply(self.users[u].add_transaction, axis = 1)
+        #    self.errors["invalid"] += self.users[u].errors["invalid"]
+        #    self.errors["inconsistent"] += self.users[u].errors["inconsistent"]
         print(self.errors)
 
         Path(self.outputDirectory).mkdir(exist_ok = True)
+
+    def _get_users(self, userData):
+        userData.reset_index(drop = True, inplace = True)
+        userData.sort_values(by = "event_time", inplace = True)
+        self.users[u] = user(u, userData.at[0, "user_creation_time"])
+        userData.apply(self.users[u].add_transaction, axis = 1)
+        self.errors["invalid"] += self.users[u].errors["invalid"]
+        self.errors["inconsistent"] += self.users[u].errors["inconsistent"]
 
     def generate_user_info(self):
         users = pd.DataFrame()
