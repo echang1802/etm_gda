@@ -5,6 +5,11 @@ from datetime import datetime, timedelta
 
 class wallet:
 
+    """
+    Tiene todo los movimientos de monedas de un usuario y calcula estadisticas
+    sobre los consumos del mismo.
+    """
+
     def __init__(self):
         self.data = pd.DataFrame()
         self.balance = 0
@@ -42,6 +47,11 @@ class wallet:
 
 class distribution:
 
+    """
+    Calcula la función de disitribución acumulada empírica sobre los datos y luego,
+    usando la función inversa genera muestras con la misma distribución.
+    """
+
     def __init__(self, values):
         values = values.sort_values().reset_index(drop = True)
         self.values = [values[0]]
@@ -67,6 +77,11 @@ class distribution:
 
 class user:
 
+    """
+    Tiene todo la información de un usuario, permitiendo asi, obtener estadísticas
+    y realizar simulaciones.
+    """
+
     def __init__(self, user_id, user_creation_time):
         self.id = user_id
         self.created = user_creation_time
@@ -81,14 +96,18 @@ class user:
             "sink_7" : 0
         }
         self.wallet = wallet()
+        self.errors = {
+            "invalid" : 0,
+            "inconsistent" : 0
+        }
 
     def add_transaction(self, transaction):
         if transaction.event_time < self.created or transaction.coins_balance < 0 or transaction.amount_spent <= 0:
-            print("Invalid transaction")
+            self.errors["invalid"] += 1
             return
         coin_gap = self.wallet.balance - transaction.amount_spent
         if transaction.coins_balance < coin_gap:
-            print("Inconsistent transaction")
+            self.errors["inconsistent"] += 1
             return
 
         if transaction.coins_balance > coin_gap:
@@ -103,14 +122,23 @@ class user:
         self.sinks[transaction.sink_channel] += transaction.amount_spent
         self.last_transaction = transaction.event_time
 
+    def get_info(self):
+
+        pass
+
+    def validate(self):
+        return self.transactions.shape[0] > 0 and \
+            self.wallet.get_days_between().size > 0 and \
+            self.wallet.get_spent().size > 0
+
     def simulate(self, date = None, days = 10):
         if date is None:
             date = self.last_transaction
 
         daysDistribution = distribution(self.wallet.get_days_between())
         spentDistribution = distribution(self.wallet.get_spent())
-        sinkDistribution = distribution(pd.Series(self.transactions["sink"].unique()))
-        platformDistribution = distribution(pd.Series(self.transactions["platform"].unique()))
+        sinkDistribution = distribution(self.transactions["sink"])
+        platformDistribution = distribution(self.transactions["platform"])
 
         self.simulated_transactions = pd.DataFrame()
         endDate = date + timedelta(days = days)
@@ -140,7 +168,13 @@ class user:
 
 class process:
 
+    """
+    Orquesta todo el procesamiento manteniendo limpio el ambiente de trabajo.
+    """
+
     def __init__(self, inputDirectory, outputDirectory):
+        from pathlib import Path
+
         self.inputDirectory = inputDirectory
         self.outputDirectory = outputDirectory
 
@@ -150,22 +184,34 @@ class process:
         data["event_time"] = data["event_time"].apply(lambda x:  datetime.strptime(x, "%Y-%m-%dT%H:%M:%S.%fZ"))
 
         self.users = {}
+        self.errors = {
+            "invalid" : 0,
+            "inconsistent" : 0
+        }
         dataUsers = data["user_id"].unique()
         for u in dataUsers:
             auxData = data.loc[data["user_id"] == u].reset_index(drop = True)
             auxData.sort_values(by = "event_time", inplace = True)
             self.users[u] = user(u, auxData.at[0, "user_creation_time"])
             auxData.apply(self.users[u].add_transaction, axis = 1)
+            self.errors["invalid"] += self.users[u].errors["invalid"]
+            self.errors["inconsistent"] += self.users[u].errors["inconsistent"]
+        print(self.errors)
+
+        Path(self.outputDirectory).mkdir(exist_ok = True)
 
     def generate_user_info(self):
-        daily = pd.DataFrame()
-        for u in self.users:
-            pass
-        pass
+        users = pd.DataFrame()
+        for u in self.users.values():
+            users.append(u.get_info())
+
+        users.to_csv(self.outputDirectory + "/users_info.csv", index = False)
 
     def simulate(self, days):
         data = pd.DataFrame()
-        for u in self.users:
+        for u in self.users.values():
+            if not u.validate():
+                continue
             userData = u.get_transactions()
             u.simulate(days = days)
             userData = userData.append(u.get_simulated_transactions())
