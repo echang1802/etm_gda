@@ -18,7 +18,7 @@ class wallet:
     def add(self, amount, datetime):
         self.balance += amount
         self.data = self.data.append(pd.DataFrame({
-            "datetime" : datetime,
+            "date" : datetime.date(),
             "earned" : amount,
             "spent" : 0,
             "balance" : self.balance
@@ -28,7 +28,7 @@ class wallet:
     def subtract(self, amount, datetime):
         self.balance -= amount
         self.data = self.data.append(pd.DataFrame({
-            "datetime" : datetime,
+            "date" : datetime.date(),
             "earned" : 0,
             "spent" : amount,
             "balance" : self.balance
@@ -36,13 +36,26 @@ class wallet:
         self.index += 1
 
     def get_days_between(self):
-        datetime_shifted = self.data.loc[self.data["spent"] > 0, "datetime"].shift()
-        days_between = self.data.loc[self.data["spent"] > 0, "datetime"] - datetime_shifted
+        datetime_shifted = self.data.loc[self.data["spent"] > 0, "date"].shift()
+        days_between = self.data.loc[self.data["spent"] > 0, "date"] - datetime_shifted
         return days_between.dropna().apply(lambda x: x.days)
 
     def get_spent(self):
         return self.data.loc[self.data["spent"] > 0, "spent"]
 
+    def get_earned(self):
+        return self.data.loc[self.data["earned"] > 0, "earned"]
+
+    def get_spent_average(self):
+        data = self.data.loc[self.data["spent"] > 0]
+        data = data[["date","spent"]].groupby("date").sum()
+        return data.mean()
+
+    def get_days_between_spents(self):
+        data = self.data.loc[self.data["spent"] > 0, "date"].drop_duplicates()
+        data["next_date"] = data["date"].shift()
+        data["dif_dates"] = data["next_date"] - data["date"]
+        return data["dif_dates"].dropna().apply(lambda x: x.days()).mean()
 
 
 class distribution:
@@ -123,8 +136,13 @@ class user:
         self.last_transaction = transaction.event_time
 
     def get_info(self):
-
-        pass
+        return pd.DataFrame({
+            "spent" : self.wallet.get_spent().sum(),
+            "earn" : self.waller.get_earned().sum(),
+            "spent_average" : self.wallet.get_spent_average(),
+            "days_between_spents" : self.wallet.get_days_between_spents(),
+            "favorite_platform" : self.transactions["platform"].mode()
+        }, index = { self.id })
 
     def validate(self):
         return self.transactions.shape[0] > 0 and \

@@ -12,6 +12,6 @@ if __name__ == '__main__':
 
     proc = process(args.inputFilename, args.outputDirectory)
 
-    #proc.generate_user_info()
+    proc.generate_user_info()
 
     proc.simulate(args.daysToSimulate)
