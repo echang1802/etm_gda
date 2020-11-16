@@ -11,7 +11,7 @@ if __name__ == '__main__':
     parser.add_argument('--agents', default = 4, help = 'Number of simultaneous processing')
     args = parser.parse_args()
 
-    proc = process(args.inputFilename, args.outputDirectory)
+    proc = process(args.inputFilename, args.outputDirectory, args.agents)
 
     proc.generate_user_info()
 

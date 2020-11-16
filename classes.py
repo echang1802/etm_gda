@@ -193,41 +193,43 @@ class process:
     def __init__(self, inputDirectory, outputDirectory, agents):
         from pathlib import Path
         from multiprocessing import Pool
-        self.pool = Pool(agents)
 
         self.inputDirectory = inputDirectory
         self.outputDirectory = outputDirectory
+        self.agents = agents
 
-        data = pd.read_csv(self.inputDirectory)
+        self.data = pd.read_csv(self.inputDirectory)
 
-        data["user_creation_time"] = data["user_creation_time"].apply(lambda x:  datetime.strptime(x, "%Y-%m-%dT%H:%M:%S.%fZ"))
-        data["event_time"] = data["event_time"].apply(lambda x:  datetime.strptime(x, "%Y-%m-%dT%H:%M:%S.%fZ"))
+        self.data["user_creation_time"] = self.data["user_creation_time"].apply(lambda x:  datetime.strptime(x, "%Y-%m-%dT%H:%M:%S.%fZ"))
+        self.data["event_time"] = self.data["event_time"].apply(lambda x:  datetime.strptime(x, "%Y-%m-%dT%H:%M:%S.%fZ"))
 
         self.users = {}
         self.errors = {
             "invalid" : 0,
             "inconsistent" : 0
         }
-        data = [value for key, value in data.groupby("user_id")]
-        self.pool(self._get_users, dataUsers)
-        #for u in dataUsers:
-        #    auxData = data.loc[data["user_id"] == u].reset_index(drop = True)
-        #    auxData.sort_values(by = "event_time", inplace = True)
-        #    self.users[u] = user(u, auxData.at[0, "user_creation_time"])
-        #    auxData.apply(self.users[u].add_transaction, axis = 1)
-        #    self.errors["invalid"] += self.users[u].errors["invalid"]
-        #    self.errors["inconsistent"] += self.users[u].errors["inconsistent"]
+        pool = Pool(self.agents)
+        pool.map(self._get_users, self.data["user_id"].unique())
         print(self.errors)
 
         Path(self.outputDirectory).mkdir(exist_ok = True)
 
-    def _get_users(self, userData):
+        self.data = self.data.loc[(self.data["user_creation_time"] < self.data["event_time"]) & \
+                        (self.data["amount_spent"] > 0) & (self.data["coins_balance"] >= 0)]
+        self.data["event_date"] = self.data["event_time"].apply(lambda x: x.date())
+        self.data = self.data.drop(columns = ["coins_balance","user_creation_time"]).groupby(["event_date", "user_id" "sink_channel"]).agg({
+            "amount_spent" : ["sum", "count"]
+        })
+        self.data.to_csv(self.outputDirectory + "/aggregated_data.csv", index = True)
+
+    def _get_users(self, userId):
+        userData = self.data.loc[self.data["user_id"] == userId].copy()
         userData.reset_index(drop = True, inplace = True)
         userData.sort_values(by = "event_time", inplace = True)
-        self.users[u] = user(u, userData.at[0, "user_creation_time"])
-        userData.apply(self.users[u].add_transaction, axis = 1)
-        self.errors["invalid"] += self.users[u].errors["invalid"]
-        self.errors["inconsistent"] += self.users[u].errors["inconsistent"]
+        self.users[userId] = user(userId, userData.at[0, "user_creation_time"])
+        userData.apply(self.users[userId].add_transaction, axis = 1)
+        self.errors["invalid"] += self.users[userId].errors["invalid"]
+        self.errors["inconsistent"] += self.users[userId].errors["inconsistent"]
 
     def generate_user_info(self):
         users = pd.DataFrame()
@@ -237,15 +239,26 @@ class process:
         users.to_csv(self.outputDirectory + "/users_info.csv", index = False)
 
     def simulate(self, days):
-        data = pd.DataFrame()
-        for u in self.users.values():
-            if not u.validate():
-                continue
-            userData = u.get_transactions()
-            u.simulate(days = days)
-            userData = userData.append(u.get_simulated_transactions())
-            userData["user_id"] = u.id
-            data = data.append(userData)
+        #data = pd.DataFrame()
+        #for u in self.users.values():
+        #    if not u.validate():
+        #        continue
+        #    userData = u.get_transactions()
+        #    u.simulate(days = days)
+        #    userData = userData.append(u.get_simulated_transactions())
+        #    userData["user_id"] = u.id
+        #    data = data.append(userData)
+        pool = Pool(self.agents)
+        results = pool.map(self._get_simulations, list(self.users.keys()))
+
+        data = pd.concat(results)
 
         data.reset_index(drop = True, inplace = True)
         data.to_csv(self.outputDirectory + "/simulated_data.csv", index = False)
+
+    def _get_simulations(self, userId):
+        userData = self.users[userId].get_transactions()
+        self.users[userId].simulate(days = days)
+        userData = userData.append(self.users[userId].get_simulated_transactions())
+        userData["user_id"] = userId
+        return userData
