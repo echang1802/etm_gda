@@ -21,6 +21,7 @@ class wallet:
             "date" : datetime.date(),
             "earned" : amount,
             "spent" : 0,
+            "lost": 0,
             "balance" : self.balance
         }, index = { self.index }))
         self.index += 1
@@ -31,6 +32,18 @@ class wallet:
             "date" : datetime.date(),
             "earned" : 0,
             "spent" : amount,
+            "lost": 0,
+            "balance" : self.balance
+        }, index = { self.index }))
+        self.index += 1
+
+    def lost(self, amount, datetime):
+        self.balance -= amount
+        self.data = self.data.append(pd.DataFrame({
+            "date" : datetime.date(),
+            "earned" : 0,
+            "spent" : 0,
+            "lost": amount,
             "balance" : self.balance
         }, index = { self.index }))
         self.index += 1
@@ -45,6 +58,9 @@ class wallet:
 
     def get_earned(self):
         return self.data.loc[self.data["earned"] > 0, "earned"]
+
+    def get_lost(self):
+        return self.data.loc[self.data["lost"] > 0, "lost"]
 
     def get_spent_average(self):
         data = self.data.loc[self.data["spent"] > 0]
@@ -121,7 +137,7 @@ class user:
         coin_gap = self.wallet.balance - transaction.amount_spent
         if transaction.coins_balance < coin_gap:
             self.errors["inconsistent"] += 1
-            return
+            self.wallet.lost(coin_gap - transaction.coins_balance)
 
         if transaction.coins_balance > coin_gap:
             self.wallet.add(transaction.coins_balance - coin_gap, transaction.event_time)
@@ -139,6 +155,7 @@ class user:
         return pd.DataFrame({
             "spent" : self.wallet.get_spent().sum(),
             "earn" : self.waller.get_earned().sum(),
+            "lost" : self.waller.get_lost().sum(),
             "spent_average" : self.wallet.get_spent_average(),
             "days_between_spents" : self.wallet.get_days_between_spents(),
             "favorite_platform" : self.transactions["platform"].mode()
