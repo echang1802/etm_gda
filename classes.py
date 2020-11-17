@@ -1,6 +1,7 @@
 
 import pandas as pd
 from random import random
+from multiprocessing import Pool
 from datetime import datetime, timedelta
 
 class wallet:
@@ -78,7 +79,7 @@ class distribution:
 
     """
     Calcula la función de disitribución acumulada empírica sobre los datos y luego,
-    usando la función inversa genera muestras con la misma distribución.
+    usando la función inversa, genera muestras con la misma distribución.
     """
 
     def __init__(self, values):
@@ -137,7 +138,7 @@ class user:
         coin_gap = self.wallet.balance - transaction.amount_spent
         if transaction.coins_balance < coin_gap:
             self.errors["inconsistent"] += 1
-            self.wallet.lost(coin_gap - transaction.coins_balance)
+            self.wallet.lost(coin_gap - transaction.coins_balance, transaction.event_time)
 
         if transaction.coins_balance > coin_gap:
             self.wallet.add(transaction.coins_balance - coin_gap, transaction.event_time)
@@ -209,7 +210,6 @@ class process:
 
     def __init__(self, inputDirectory, outputDirectory, agents):
         from pathlib import Path
-        from multiprocessing import Pool
 
         self.inputDirectory = inputDirectory
         self.outputDirectory = outputDirectory
@@ -234,7 +234,7 @@ class process:
         self.data = self.data.loc[(self.data["user_creation_time"] < self.data["event_time"]) & \
                         (self.data["amount_spent"] > 0) & (self.data["coins_balance"] >= 0)]
         self.data["event_date"] = self.data["event_time"].apply(lambda x: x.date())
-        self.data = self.data.drop(columns = ["coins_balance","user_creation_time"]).groupby(["event_date", "user_id" "sink_channel"]).agg({
+        self.data = self.data.drop(columns = ["coins_balance","user_creation_time"]).groupby(["event_date", "user_id","sink_channel"]).agg({
             "amount_spent" : ["sum", "count"]
         })
         self.data.to_csv(self.outputDirectory + "/aggregated_data.csv", index = True)
@@ -256,15 +256,6 @@ class process:
         users.to_csv(self.outputDirectory + "/users_info.csv", index = False)
 
     def simulate(self, days):
-        #data = pd.DataFrame()
-        #for u in self.users.values():
-        #    if not u.validate():
-        #        continue
-        #    userData = u.get_transactions()
-        #    u.simulate(days = days)
-        #    userData = userData.append(u.get_simulated_transactions())
-        #    userData["user_id"] = u.id
-        #    data = data.append(userData)
         pool = Pool(self.agents)
         results = pool.map(self._get_simulations, list(self.users.keys()))
 
