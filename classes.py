@@ -54,25 +54,36 @@ class wallet:
         days_between = self.data.loc[self.data["spent"] > 0, "date"] - datetime_shifted
         return days_between.dropna().apply(lambda x: x.days)
 
-    def get_spent(self):
+    def get_spent_for_dist(self):
         return self.data.loc[self.data["spent"] > 0, "spent"]
 
+    def get_spent(self):
+        return self.data.loc[self.data["spent"] > 0, "spent"].sum()
+
     def get_earned(self):
-        return self.data.loc[self.data["earned"] > 0, "earned"]
+        if sum(self.data["earned"] > 0) == 0:
+            return 0
+        return self.data.loc[self.data["earned"] > 0, "earned"].sum()
 
     def get_lost(self):
-        return self.data.loc[self.data["lost"] > 0, "lost"]
+        if sum(self.data["lost"] > 0) == 0:
+            return 0
+        return self.data.loc[self.data["lost"] > 0, "lost"].sum()
 
     def get_spent_average(self):
         data = self.data.loc[self.data["spent"] > 0]
         data = data[["date","spent"]].groupby("date").sum()
-        return data.mean()
+        return data["spent"].dropna().mean()
 
     def get_days_between_spents(self):
         data = self.data.loc[self.data["spent"] > 0, "date"].drop_duplicates()
-        data["next_date"] = data["date"].shift()
-        data["dif_dates"] = data["next_date"] - data["date"]
-        return data["dif_dates"].dropna().apply(lambda x: x.days()).mean()
+        if data.size < 2:
+            return 0
+        difDates = data - data.shift()
+        return difDates.dropna().apply(lambda x: x.days).mean()
+
+    def get_diff_dates(self):
+        return self.data["date"].nunique()
 
 
 class distribution:
@@ -139,8 +150,7 @@ class user:
         if transaction.coins_balance < coin_gap:
             self.errors["inconsistent"] += 1
             self.wallet.lost(coin_gap - transaction.coins_balance, transaction.event_time)
-
-        if transaction.coins_balance > coin_gap:
+        elif transaction.coins_balance > coin_gap:
             self.wallet.add(transaction.coins_balance - coin_gap, transaction.event_time)
 
         self.wallet.subtract(transaction.amount_spent, transaction.event_time)
@@ -154,12 +164,14 @@ class user:
 
     def get_info(self):
         return pd.DataFrame({
-            "spent" : self.wallet.get_spent().sum(),
-            "earn" : self.waller.get_earned().sum(),
-            "lost" : self.waller.get_lost().sum(),
+            "transactions" : self.transactions.shape[0],
+            "dates_with_transactions" : self.wallet.get_diff_dates(),
+            "spent" : self.wallet.get_spent(),
+            "earn" : self.wallet.get_earned(),
+            "lost" : self.wallet.get_lost(),
             "spent_average" : self.wallet.get_spent_average(),
             "days_between_spents" : self.wallet.get_days_between_spents(),
-            "favorite_platform" : self.transactions["platform"].mode()
+            "favorite_platform" : self.transactions["platform"].value_counts().index[0]
         }, index = { self.id })
 
     def validate(self):
@@ -172,7 +184,7 @@ class user:
             date = self.last_transaction
 
         daysDistribution = distribution(self.wallet.get_days_between())
-        spentDistribution = distribution(self.wallet.get_spent())
+        spentDistribution = distribution(self.wallet.get_spent_for_dist())
         sinkDistribution = distribution(self.transactions["sink"])
         platformDistribution = distribution(self.transactions["platform"])
 
@@ -193,12 +205,18 @@ class user:
         data = self.transactions.copy().reset_index(drop = False)
         data["date"] = data["index"].apply(lambda x: x.date())
         data.drop(columns = "index", inplace = True)
+        data = data.groupby(["date", "platform", "sink"]).agg({
+            "spent" : ["sum", "count"]
+        })
         data["data_type"] = "real"
         return data
 
     def get_simulated_transactions(self):
         data = self.simulated_transactions.copy().reset_index(drop = False)
-        data.rename(columns = {"index": "date"})
+        data.rename(columns = {"index": "date"}, inplace = True)
+        data = data.groupby(["date", "platform", "sink"]).agg({
+            "spent" : ["sum", "count"]
+        })
         data["data_type"] = "simulated"
         return data
 
@@ -220,13 +238,17 @@ class process:
         self.data["user_creation_time"] = self.data["user_creation_time"].apply(lambda x:  datetime.strptime(x, "%Y-%m-%dT%H:%M:%S.%fZ"))
         self.data["event_time"] = self.data["event_time"].apply(lambda x:  datetime.strptime(x, "%Y-%m-%dT%H:%M:%S.%fZ"))
 
+        pool = Pool(self.agents)
+        results = pool.map(self._get_users, self.data["user_id"].unique())
         self.users = {}
         self.errors = {
             "invalid" : 0,
             "inconsistent" : 0
         }
-        pool = Pool(self.agents)
-        pool.map(self._get_users, self.data["user_id"].unique())
+        for u in results:
+            self.users[u.id] = u
+            self.errors["invalid"] += u.errors["invalid"]
+            self.errors["inconsistent"] += u.errors["inconsistent"]
         print(self.errors)
 
         Path(self.outputDirectory).mkdir(exist_ok = True)
@@ -243,19 +265,24 @@ class process:
         userData = self.data.loc[self.data["user_id"] == userId].copy()
         userData.reset_index(drop = True, inplace = True)
         userData.sort_values(by = "event_time", inplace = True)
-        self.users[userId] = user(userId, userData.at[0, "user_creation_time"])
-        userData.apply(self.users[userId].add_transaction, axis = 1)
-        self.errors["invalid"] += self.users[userId].errors["invalid"]
-        self.errors["inconsistent"] += self.users[userId].errors["inconsistent"]
+        userIns = user(userId, userData.at[0, "user_creation_time"])
+        userData.apply(userIns.add_transaction, axis = 1)
+        return userIns
 
     def generate_user_info(self):
         users = pd.DataFrame()
-        for u in self.users.values():
-            users.append(u.get_info())
+        for userId in self.users.keys():
+            print(userId, self.users[userId].wallet.data.shape)
+            if self.users[userId].wallet.index == 0:
+                continue
+            users = users.append(self.users[userId].get_info())
 
+        users.reset_index(drop = False, inplace = True)
+        users.rename(columns={"index": "user_id"})
         users.to_csv(self.outputDirectory + "/users_info.csv", index = False)
 
     def simulate(self, days):
+        self.days = days
         pool = Pool(self.agents)
         results = pool.map(self._get_simulations, list(self.users.keys()))
 
@@ -265,8 +292,8 @@ class process:
         data.to_csv(self.outputDirectory + "/simulated_data.csv", index = False)
 
     def _get_simulations(self, userId):
-        userData = self.users[userId].get_transactions()
-        self.users[userId].simulate(days = days)
-        userData = userData.append(self.users[userId].get_simulated_transactions())
+        self.users[userId].simulate(days = self.days)
+        #userData = self.users[userId].get_transactions()
+        userData = self.users[userId].get_simulated_transactions()
         userData["user_id"] = userId
         return userData
